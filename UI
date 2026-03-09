@@ -124,48 +124,35 @@ def back_one_level():
 
 
 def robust_parse_date(date_str):
-    """盡量寬鬆解析各種日期格式，返回 datetime 或 NaT"""
-    if pd.isna(date_str) or str(date_str).strip() == "":
+    """极致兼容版本：确保 2026 等各种格式不被漏掉"""
+    if pd.isna(date_str) or str(date_str).strip().lower() in ["nan", "nat", "none", ""]:
         return pd.NaT
 
     s = str(date_str).strip()
+    # 1. 基础预处理：去掉中文干扰，统一分隔符
+    s = s.replace("年", "-").replace("月", "-").replace("日", "")
+    s = s.replace("/", "-").replace(".", "-")
+    
+    # 2. 核心：直接先用 Pandas 强力推断（dayfirst=False 适配月-日-年）
+    try:
+        # fuzzy=True 能自动忽略掉字符串前后的杂质字符
+        return pd.to_datetime(s, errors='raise', fuzzy=True)
+    except:
+        pass
 
-    # 常見中文/混雜情況先替換
-    s = s.replace("年", "-").replace("月", "-").replace("日", "").replace("/", "-").replace(".", "-")
-    s = s.replace("上午", " AM").replace("下午", " PM").replace("时", ":").replace("分", ":").replace("秒", "")
-
-    # 去掉多餘空格
-    s = " ".join(s.split())
-
-    # 常見格式嘗試列表（優先級由高到低）
+    # 3. 备选：如果自动推断失败，再走你的手动格式列表
     fmts = [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d",
-        "%m-%d-%Y",
-        "%m/%d/%Y",
-        "%m-%d-%y",
-        "%m/%d/%y",
-        "%Y/%m/%d",
-        "%d-%m-%Y",
-        "%d/%m/%Y",
-        "%Y.%m.%d",
-        "%Y年%m月%d日 %H:%M:%S",
-        "%Y年%m月%d日",
-        "%m月%d日 %Y",
+        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
+        "%m-%d-%Y", "%m/%d/%Y", "%m-%d-%y", "%m/%d/%y",
+        "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y", "%Y.%m.%d"
     ]
-
     for fmt in fmts:
         try:
-            return pd.to_datetime(s, format=fmt, errors='raise')
+            return pd.to_datetime(s, format=fmt)
         except:
-            pass
-
-    # 最後再用 pandas 通用解析（比較慢但最寬鬆）
-    try:
-        return pd.to_datetime(s, errors='raise')
-    except:
-        return pd.NaT
+            continue
+            
+    return pd.NaT
 
 
 def load_data(file_name):
@@ -267,22 +254,27 @@ elif st.session_state.stage == "FILE":
 
             if date_col and df_filtered[date_col].dtype == 'datetime64[ns]':
                 with col_d:
-                    # 已經是 datetime 格式，直接用
+                    # 1. 计算当前列中真正的最小值和最大值
                     min_d = df_filtered[date_col].min()
                     max_d = df_filtered[date_col].max()
 
-                    # 容錯
+                    # 2. 容错处理：如果数据全为空，则默认为今天
                     if pd.isnull(min_d): min_d = datetime.now()
                     if pd.isnull(max_d): max_d = datetime.now()
-
+                    
+                    # 3. 动态上限设置：只要 robust_parse_date 抓到了 2026，这里就是 2026
+                    date_limit = max_d.date()
+                    
+                    # 4. 渲染日期输入组件
                     date_range = st.date_input(
                         f"筛选范围 (基于 {date_col})",
                         value=(min_d.date(), max_d.date()),
-                        min_value=min_d.date() if not pd.isnull(min_d) else None,
-                        max_value=max_d.date() if not pd.isnull(max_d) else None,
-                        key=f"date_filter_{selected_file}"
+                        min_value=datetime(2023, 1, 1).date(),
+                        max_value=date_limit,  
+                        key=f"date_filter_{selected_file}" # 使用文件名确保 key 唯一
                     )
 
+                    # 5. 执行过滤逻辑
                     if isinstance(date_range, tuple) and len(date_range) == 2:
                         start_date, end_date = date_range
                         mask = (df_filtered[date_col].dt.date >= start_date) & \
