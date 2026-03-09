@@ -7,11 +7,13 @@ from io import BytesIO
 from datetime import datetime
 import numpy as np
 
-# --- 1. 页面配置与安全校验 ---
-st.set_page_config(layout="wide", page_title="美国C段口岸数据看板", initial_sidebar_state="collapsed")
+# --- 1. 页面配置 ---
+st.set_page_config(layout="wide", page_title="美国C段口岸数据看板")
+
 
 def check_password():
     """返回 True 如果用户输入了正确的密码"""
+
     def password_entered():
         if st.session_state["password"] == "666888":
             st.session_state["password_correct"] = True
@@ -29,13 +31,13 @@ def check_password():
     else:
         return True
 
+
 if not check_password():
     st.stop()
 
-# --- 2. 深度 CSS 定制 (找回丢失的所有样式) ---
+# --- 2. 深度 CSS 定制 ---
 st.markdown("""
     <style>
-    /* 全局间距调整 */
     .main .block-container {
         padding-top: 1rem !important;
         padding-left: 5rem !important;
@@ -44,20 +46,16 @@ st.markdown("""
     header {visibility: hidden;}
     footer {visibility: hidden;}
 
-    /* 标题与面包屑 */
     .main-title {
-        font-size: 28px;
+        font-size: 26px;
         font-weight: bold;
-        color: #1E1E1E;
         margin-bottom: 1rem;
-        border-left: 5px solid #007bff;
-        padding-left: 15px;
     }
 
     .breadcrumb-text {
         font-size: 31px !important; 
         font-weight: 600;
-        color: #444;
+        color: #333;
         display: flex;
         align-items: center;
         height: 40px; 
@@ -65,7 +63,6 @@ st.markdown("""
         margin-top: 22px !important; 
     }
 
-    /* AgGrid 侧边栏按钮样式补完 */
     .ag-side-buttons {
         background-color: #f8f9fa !important;
         border-left: 1px solid #d0d0d0 !important;
@@ -77,18 +74,14 @@ st.markdown("""
         font-weight: bold !important;
     }
 
-    /* 表格单元格强制不换行 */
     .ag-cell { white-space: nowrap !important; }
 
-    /* 按钮样式精修 */
     .back-btn-box div.stButton > button {
         height: 40px !important;
         width: 100px !important;
         font-size: 14px !important;
         border-radius: 6px;
         margin: 0 !important;
-        background-color: #ffffff;
-        border: 1px solid #ccc;
     }
 
     div.stButton > button {
@@ -97,33 +90,28 @@ st.markdown("""
         border-radius: 8px;
         background-color: #f8f9fa;
         margin-bottom: 5px;
-        transition: all 0.3s;
     }
-    div.stButton > button:hover {
-        border-color: #007bff;
-        color: #007bff;
-        background-color: #eef6ff;
-    }
-
-    /* 状态Toast样式增强 */
-    .stToast {
-        background-color: #28a745 !important;
-        color: white !important;
+    /* 日期选择器容器微调 */
+    .date-container {
+        background: #f0f2f6;
+        padding: 10px;
+        border-radius: 10px;
+        margin-bottom: 10px;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 基础配置与增强型日期逻辑 ---
+# --- 3. 基础配置与逻辑 ---
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "测试文件夹")
 if not os.path.exists(BASE_DIR):
     os.makedirs(BASE_DIR)
 
-# 找回自动刷新频率配置
 st_autorefresh(interval=5000, key="datarefresh")
 
 if 'stage' not in st.session_state: st.session_state.stage = "ROOT"
 if 'sel_folder' not in st.session_state: st.session_state.sel_folder = ""
 if 'sel_user' not in st.session_state: st.session_state.sel_user = ""
+
 
 def back_one_level():
     if st.session_state.stage == "FILE":
@@ -134,245 +122,241 @@ def back_one_level():
         st.session_state.sel_user = ""
     st.rerun()
 
+
 def robust_parse_date(date_str):
-    """找回极致解析逻辑：支持 2026 等未来日期并清理脏字符"""
-    if pd.isna(date_str) or str(date_str).strip().lower() in ["nan", "nat", "none", ""]:
+    """盡量寬鬆解析各種日期格式，返回 datetime 或 NaT"""
+    if pd.isna(date_str) or str(date_str).strip() == "":
         return pd.NaT
+
     s = str(date_str).strip()
+
+    # 常見中文/混雜情況先替換
     s = s.replace("年", "-").replace("月", "-").replace("日", "").replace("/", "-").replace(".", "-")
+    s = s.replace("上午", " AM").replace("下午", " PM").replace("时", ":").replace("分", ":").replace("秒", "")
+
+    # 去掉多餘空格
+    s = " ".join(s.split())
+
+    # 常見格式嘗試列表（優先級由高到低）
+    fmts = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%m-%d-%Y",
+        "%m/%d/%Y",
+        "%m-%d-%y",
+        "%m/%d/%y",
+        "%Y/%m/%d",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%Y.%m.%d",
+        "%Y年%m月%d日 %H:%M:%S",
+        "%Y年%m月%d日",
+        "%m月%d日 %Y",
+    ]
+
+    for fmt in fmts:
+        try:
+            return pd.to_datetime(s, format=fmt, errors='raise')
+        except:
+            pass
+
+    # 最後再用 pandas 通用解析（比較慢但最寬鬆）
     try:
-        # fuzzy=True 适配带杂质的字符串
-        return pd.to_datetime(s, errors='raise', fuzzy=True)
+        return pd.to_datetime(s, errors='raise')
     except:
-        fmts = [
-            "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
-            "%m-%d-%Y", "%m/%d/%Y", "%m-%d-%y", "%m/%d/%y",
-            "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y", "%Y.%m.%d", "%Y%m%d"
-        ]
-        for fmt in fmts:
-            try: return pd.to_datetime(s, format=fmt)
-            except: continue
-    return pd.NaT
+        return pd.NaT
+
 
 def load_data(file_name):
-    """增强型数据加载：确保日期列类型稳固，不被 fillna 破坏"""
     path = os.path.join(BASE_DIR, file_name)
-    if not os.path.exists(path): return None
-    try:
-        # 使用 openpyxl 引擎确保读取最新格式
-        df = pd.read_excel(path, engine='openpyxl')
-        possible_date_cols = ["ETA", "日期", "Inputdate", "Date", "eta", "到港日期", "預計到達"]
-        date_col = next((col for col in possible_date_cols if col in df.columns), None)
-        
-        if date_col:
-            # 这里的逻辑关键：先不 fillna，保持 datetime 格式用于后续筛选
-            df[date_col] = df[date_col].astype(str).apply(robust_parse_date)
-        return df
-    except Exception as e:
-        st.error(f"文件加载异常: {e}")
+    if not os.path.exists(path):
         return None
 
-# --- 4. 界面渲染逻辑 ---
+    try:
+        df = pd.read_excel(path, engine='openpyxl')
+
+        # 尋找可能的日期欄位
+        possible_date_cols = ["ETA", "日期", "Inputdate", "Date", "eta", "到港日期", "預計到達"]
+        date_col = next((col for col in possible_date_cols if col in df.columns), None)
+
+        if date_col:
+            # 強制轉成字串再解析，處理最髒的數據
+            df[date_col] = df[date_col].astype(str).replace(['nan', 'NaT', 'None', ''], np.nan)
+            df[date_col] = df[date_col].apply(robust_parse_date)
+
+        return df.fillna("")
+    except:
+        return None
+
+
+# --- 4. 界面渲染 ---
 st.markdown('<div class="main-title">🇺🇸 美国C段口岸数据看板</div>', unsafe_allow_html=True)
 
-# 导航条逻辑
 if st.session_state.stage != "ROOT":
     col_nav = st.container()
     with col_nav:
         c1, c2 = st.columns([1, 10])
         with c1:
             st.markdown('<div class="back-btn-box">', unsafe_allow_html=True)
-            if st.button("⬅ 返回"): back_one_level()
+            if st.button("⬅ 返回"):
+                back_one_level()
             st.markdown('</div>', unsafe_allow_html=True)
         with c2:
             path_str = f"🏠 主目录 / 📂 {st.session_state.sel_folder}"
-            if st.session_state.sel_user: path_str += f" / {st.session_state.sel_user}"
+            if st.session_state.sel_user:
+                path_str += f" / {st.session_state.sel_user}"
             st.markdown(f'<div class="breadcrumb-text">{path_str}</div>', unsafe_allow_html=True)
     st.write("---")
 
-# 阶段 1：根目录选择
 if st.session_state.stage == "ROOT":
-    st.write("### 📂 请选择口岸目录")
+    st.write("### 目录")
     folders = ["LAX", "MIA", "ORD", "原始数据"]
-    cols = st.columns(len(folders))
-    for idx, f in enumerate(folders):
-        with cols[idx]:
-            icon = "📍" if f != "原始数据" else "📦"
-            if st.button(f"{icon}\n\n{f}", key=f"root_{f}", use_container_width=True):
-                st.session_state.sel_folder = f
-                st.session_state.stage = "USER"
-                st.rerun()
+    for f in folders:
+        icon = "📍" if f != "原始数据" else "📦"
+        if st.button(f"{icon} {f}", key=f"root_{f}", use_container_width=True):
+            st.session_state.sel_folder = f
+            st.session_state.stage = "USER"
+            st.rerun()
 
-# 阶段 2：业务线选择
 elif st.session_state.stage == "USER":
-    st.write(f"### 👤 选择所属业务线")
-    users = ["AE", "4PX", "精算数据"] if st.session_state.sel_folder == "原始数据" else ["AE", "4PX"]
-    cols = st.columns(len(users))
-    for idx, u in enumerate(users):
-        with cols[idx]:
-            if st.button(f"💼 {u}", key=f"u_{u}", use_container_width=True):
-                st.session_state.sel_user = u
-                st.session_state.stage = "FILE"
-                st.rerun()
+    st.write(f"### 选择业务线")
+    # 如果是“原始数据”，额外显示“精算数据”
+    if st.session_state.sel_folder == "原始数据":
+        users = ["AE", "4PX", "精算数据"]
+    else:
+        users = ["AE", "4PX"]
 
-# 阶段 3：文件处理与 AgGrid (最核心 200 行在这里)
+    for u in users:
+        if st.button(u, key=f"u_{u}", use_container_width=True):
+            st.session_state.sel_user = u
+            st.session_state.stage = "FILE"
+            st.rerun()
+
 elif st.session_state.stage == "FILE":
     port, user = st.session_state.sel_folder, st.session_state.sel_user
-    
-    # 找回完整的目标文件匹配逻辑
+
     if port == "原始数据" and user == "精算数据":
+        # 特殊处理：直接指定精算汇总表
         target_files = ["精算汇总表.xlsx"]
     elif port == "原始数据":
         target_files = [f"LAX-{user}.xlsx", f"MIA-{user}.xlsx", f"ORD-{user}.xlsx"]
     else:
         target_files = [f"{port}-{user}-日报.xlsx", f"{port}-{user}-实报实销.xlsx"]
-    
     valid_files = [f for f in target_files if os.path.exists(os.path.join(BASE_DIR, f))]
 
     if not valid_files:
-        st.warning(f"⚠️ 在 {BASE_DIR} 下未找到对应的 {user} 报表文件。")
+        st.warning("该分类下暂无报表文件。")
     else:
+        # 文件选择和日期筛选放在同一行区域
         col_f, col_d = st.columns([1, 2])
         with col_f:
-            selected_file = st.selectbox("📑 切换报表文件", valid_files, label_visibility="visible")
+            selected_file = st.selectbox("文件列表", valid_files, label_visibility="visible")
 
-        # 加载原始数据
         df_raw = load_data(selected_file)
 
         if df_raw is not None:
-            # 确定日期列
-            date_col = next((col for col in ["ETA", "日期", "Inputdate", "Date"] if col in df_raw.columns), None)
+            # --- 日期过滤逻辑 ---
+            date_col = None
+            for col in ["ETA", "日期", "Inputdate", "Date"]:
+                if col in df_raw.columns:
+                    date_col = col
+                    break
+
             df_filtered = df_raw.copy()
 
-            # --- 彻底修复 2026 日期筛选与灰色禁用问题 ---
-            if date_col and pd.api.types.is_datetime64_any_dtype(df_filtered[date_col]):
+            if date_col and df_filtered[date_col].dtype == 'datetime64[ns]':
                 with col_d:
-                    valid_dates = df_filtered[date_col].dropna()
-                    if not valid_dates.empty:
-                        min_d = valid_dates.min().date()
-                        max_d = valid_dates.max().date()
-                        # 重点：如果数据有 2026，这里 cal_limit 就会包含 2026，解决灰色点击问题
-                        cal_limit = max(max_d, datetime.now().date())
-                        
-                        date_range = st.date_input(
-                            f"📅 筛选 {date_col} 范围 (数据最大值: {max_d})",
-                            value=(min_d, max_d),
-                            min_value=datetime(2023, 1, 1).date(),
-                            max_value=cal_limit,
-                            key=f"dr_{selected_file}"
-                        )
-                        
-                        # 执行过滤，确保只显示选定年份单子
-                        if isinstance(date_range, tuple) and len(date_range) == 2:
-                            df_filtered = df_filtered[
-                                (df_filtered[date_col].dt.date >= date_range[0]) & 
-                                (df_filtered[date_col].dt.date <= date_range[1])
-                            ]
-                    else:
-                        st.info("ℹ️ 当前文件日期列数据不规范，已跳过日期筛选。")
+                    # 已经是 datetime 格式
+                    min_d = df_filtered[date_col].min()
+                    max_d = df_filtered[date_col].max()
 
-            # --- 准备 AgGrid 最终显示数据 ---
-            display_df = df_filtered.copy()
-            # 转换日期格式供前端展示
-            if date_col in display_df.columns:
-                display_df[date_col] = display_df[date_col].dt.strftime('%Y-%m-%d %H:%M:%S').fillna("")
-            
-            # 补齐所有空值，防止 AgGrid 报错
-            display_df = display_df.fillna("").astype(str)
-            
-            # 找回自动索引插入逻辑
-            if "Index" not in display_df.columns:
-                display_df.insert(0, "Index", range(1, len(display_df) + 1))
+                    # 容错：如果数据为空，设为当前
+                    if pd.isnull(min_d): min_d = datetime.now()
+                    if pd.isnull(max_d): max_d = datetime.now()
+                    
+                    # 关键修复点：将控件的最大可选范围手动拉长到 2030 年，确保 2026 年不会因为处于“未来”而被置灰不可点
+                    limit_max = datetime(2030, 12, 31).date()
+
+                    date_range = st.date_input(
+                        f"筛选范围 (基于 {date_col})",
+                        value=(min_d.date(), max_d.date()),
+                        min_value=None, # 不设死最小值，增加灵活性
+                        max_value=limit_max, # 修复点：允许选择到 2030 年
+                        key=f"date_filter_{selected_file}"
+                    )
+
+                    if isinstance(date_range, tuple) and len(date_range) == 2:
+                        start_date, end_date = date_range
+                        mask = (df_filtered[date_col].dt.date >= start_date) & \
+                               (df_filtered[date_col].dt.date <= end_date)
+                        df_filtered = df_filtered.loc[mask]
+
+                # 最終顯示用：轉成友好的字串格式
+                if date_col in df_filtered.columns:
+                    df_filtered[date_col] = df_filtered[date_col].apply(
+                        lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else ""
+                    )
+
+            # 所有欄位轉字串，給 AgGrid 用
+            df_filtered = df_filtered.astype(str).replace({"nan": "", "NaT": "", "None": ""})
+
+            if "Index" not in df_filtered.columns:
+                df_filtered.insert(0, "Index", range(1, len(df_filtered) + 1))
 
             st.write("---")
-            
-            # 表头操作区
             t_col, dl_col = st.columns([4, 1])
             with t_col:
-                st.markdown(f"📝 **当前编辑：** `{selected_file}` | 📊 **当前数据量：** `{len(display_df)}` 行")
+                st.write(f"**当前编辑：{selected_file} (共 {len(df_filtered)} 行)**")
             with dl_col:
-                # 找回 Excel 下载导出逻辑
+                st.markdown('<div class="back-btn-box">', unsafe_allow_html=True)
                 towrite = BytesIO()
-                display_df.to_excel(towrite, index=False, engine='openpyxl')
-                st.download_button(
-                    "📥 下载当前筛选文档", 
-                    towrite.getvalue(), 
-                    file_name=f"Filtered_{selected_file}",
-                    use_container_width=True
-                )
+                df_filtered.to_excel(towrite, index=False, engine='openpyxl')
+                st.download_button("下载当前文档", towrite.getvalue(), file_name=f"Filtered_{selected_file}",
+                                    use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
 
-            # --- AgGrid 找回丢失的 50+ 行企业级配置 ---
-            gb = GridOptionsBuilder.from_dataframe(display_df)
-            v_line_style = {'border-right': '1px solid #d0d0d0', 'background-color': '#ffffff'}
-            
-            # 默认列定义
+            # --- AgGrid 配置 ---
+            gb = GridOptionsBuilder.from_dataframe(df_filtered)
+            vertical_line_style = {'border-right': '1px solid #d0d0d0'}
             gb.configure_default_column(
-                editable=True, 
-                filter=True, 
-                sortable=True, 
-                resizable=True,
-                autoHeight=False, 
-                wrapText=False, 
-                minWidth=160,
-                cellStyle=v_line_style
+                editable=True, filter=True, sortable=True, resizable=True,
+                autoHeight=False, wrapText=False, minWidth=150,
+                cellStyle=vertical_line_style
             )
-            
-            # 找回 Index 列锁定配置
             gb.configure_column(
-                "Index", 
-                width=90, 
-                pinned='left', 
-                cellStyle={'border-right': '2px solid #007bff', 'font-weight': 'bold'}
+                "Index", width=80, pinned='left', cellStyle=vertical_line_style
             )
-            
-            # 找回侧边栏和分页配置
             gb.configure_side_bar(filters_panel=False, columns_panel=True)
             gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=50)
             gb.configure_selection(selection_mode="multiple", use_checkbox=True)
-            
-            # 找回企业级特性支持 (RangeSelection, FillHandle)
+
             gb.configure_grid_options(
-                enableRangeSelection=True,      # 找回范围选择
-                enableFillHandle=True,         # 找回像 Excel 一样的下拉填充
-                rowDragManaged=True,           # 找回行拖拽
+                enableRangeSelection=True,
+                enableFillHandle=True,
+                rowDragManaged=True,
                 suppressColumnVirtualisation=True,
                 domLayout='normal',
-                alwaysShowHorizontalScroll=True,
-                groupHeaderHeight=40,
-                headerHeight=45
+                alwaysShowHorizontalScroll=True
             )
 
-            # 渲染表格
             res = AgGrid(
-                display_df, 
-                gridOptions=gb.build(), 
-                height=750, 
+                df_filtered,
+                gridOptions=gb.build(),
+                height=800,
                 theme='alpine',
-                update_mode=GridUpdateMode.VALUE_CHANGED, 
-                data_return_mode=DataReturnMode.FILTERED_AND_SORTED, # 找回数据返回模式
-                enable_enterprise_modules=True,   # 必须开启以支持 FillHandle
-                fit_columns_on_grid_load=False, 
-                key=f"full_grid_{selected_file}_{len(display_df)}"
+                update_mode=GridUpdateMode.VALUE_CHANGED,
+                enable_enterprise_modules=True,
+                fit_columns_on_grid_load=False,
+                key=f"grid_{selected_file}_{len(df_filtered)}"
             )
 
-            # --- 提交同步逻辑 (确保保存完整性) ---
-            st.write("")
-            if st.button("🚀 确认提交并同步修改到原始文件", type="primary", use_container_width=True):
+            if st.button("💾 确认提交修改", type="primary", use_container_width=True):
                 try:
-                    # 获取 AgGrid 返回的修改后数据
-                    updated_data = pd.DataFrame(res['data'])
-                    if "Index" in updated_data.columns:
-                        updated_data = updated_data.drop(columns=["Index"])
-                    
-                    # 写入 Excel
-                    save_path = os.path.join(BASE_DIR, selected_file)
-                    updated_data.to_excel(save_path, index=False)
-                    
-                    st.success(f"💾 同步成功！数据已更新至：{selected_file}")
-                    st.toast("✅ 数据已持久化保存")
+                    save_df = pd.DataFrame(res['data'])
+                    if "Index" in save_df.columns:
+                        save_df = save_df.drop(columns=["Index"])
+                    save_df.to_excel(os.path.join(BASE_DIR, selected_file), index=False)
+                    st.toast("✅ 数据已同步（仅保存当前过滤范围内的修改）")
                 except Exception as e:
-                    st.error(f"❌ 保存失败！请检查文件是否被 Excel 占用。错误详情: {e}")
-
-# 页脚声明
-st.markdown("---")
-st.caption("🇺🇸 美国C段数据看板 v2.1 | 数据实时同步中")
+                    st.error(f"保存失败: {e}")
