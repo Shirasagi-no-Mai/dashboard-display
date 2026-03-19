@@ -6,14 +6,15 @@ import os
 from io import BytesIO
 from datetime import datetime
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from sklearn.linear_model import LinearRegression
 
 # --- 1. 页面配置 ---
 st.set_page_config(layout="wide", page_title="美国C段口岸数据看板")
 
 
 def check_password():
-    """返回 True 如果用户输入了正确的密码"""
-
     def password_entered():
         if st.session_state["password"] == "666888":
             st.session_state["password_correct"] = True
@@ -32,162 +33,107 @@ def check_password():
         return True
 
 
-if not check_password():
-    st.stop()
+if not check_password(): st.stop()
 
-# --- 2. 深度 CSS 定制 ---
+# --- 2. 深度 CSS 定制 (还原 31px 标题和 5rem 边距) ---
 st.markdown("""
     <style>
-    .main .block-container {
-        padding-top: 1rem !important;
-        padding-left: 5rem !important;
-        padding-right: 5rem !important;
-    }
+    .main .block-container { padding-top: 1rem !important; padding-left: 5rem !important; padding-right: 5rem !important; }
     header {visibility: hidden;}
     footer {visibility: hidden;}
-
-    .main-title {
-        font-size: 26px;
-        font-weight: bold;
-        margin-bottom: 1rem;
-    }
-
-    .breadcrumb-text {
-        font-size: 31px !important; 
-        font-weight: 600;
-        color: #333;
-        display: flex;
-        align-items: center;
-        height: 40px; 
-        line-height: 40px;
-        margin-top: 22px !important; 
-    }
-
-    .ag-side-buttons {
-        background-color: #f8f9fa !important;
-        border-left: 1px solid #d0d0d0 !important;
-    }
-    .ag-side-button button {
-        background-color: #e9ecef !important;
-        border-bottom: 1px solid #dee2e6 !important;
-        color: #007bff !important;
-        font-weight: bold !important;
-    }
-
+    .main-title { font-size: 26px; font-weight: bold; margin-bottom: 1rem; }
+    .breadcrumb-text { font-size: 31px !important; font-weight: 600; color: #333; display: flex; align-items: center; height: 40px; margin-top: 22px !important; }
     .ag-cell { white-space: nowrap !important; }
-
-    .back-btn-box div.stButton > button {
-        height: 40px !important;
-        width: 100px !important;
-        font-size: 14px !important;
-        border-radius: 6px;
-        margin: 0 !important;
-    }
-
-    div.stButton > button {
-        height: 55px !important;
-        font-size: 16px !important;
-        border-radius: 8px;
-        background-color: #f8f9fa;
-        margin-bottom: 5px;
-    }
-    /* 日期选择器容器微调 */
-    .date-container {
-        background: #f0f2f6;
-        padding: 10px;
-        border-radius: 10px;
-        margin-bottom: 10px;
-    }
+    .ag-side-buttons { background-color: #f8f9fa !important; border-left: 1px solid #d0d0d0 !important; }
+    .back-btn-box div.stButton > button { height: 40px !important; width: 100px !important; font-size: 14px !important; border-radius: 6px; margin: 0 !important; }
+    div.stButton > button { height: 55px !important; font-size: 16px !important; border-radius: 8px; background-color: #f8f9fa; margin-bottom: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 基础配置与逻辑 ---
+# --- 3. 基础逻辑 ---
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "测试文件夹")
-if not os.path.exists(BASE_DIR):
-    os.makedirs(BASE_DIR)
+if not os.path.exists(BASE_DIR): os.makedirs(BASE_DIR)
 
 st_autorefresh(interval=5000, key="datarefresh")
 
 if 'stage' not in st.session_state: st.session_state.stage = "ROOT"
 if 'sel_folder' not in st.session_state: st.session_state.sel_folder = ""
 if 'sel_user' not in st.session_state: st.session_state.sel_user = ""
+if 'dash_sub' not in st.session_state: st.session_state.dash_sub = ""
 
 
 def back_one_level():
-    if st.session_state.stage == "FILE":
+    if st.session_state.stage == "DASHBOARD":
+        if st.session_state.dash_sub != "":
+            st.session_state.dash_sub = ""
+        else:
+            st.session_state.stage = "ROOT"; st.session_state.sel_folder = ""
+    elif st.session_state.stage == "FILE":
         st.session_state.stage = "USER"
     elif st.session_state.stage == "USER":
-        st.session_state.stage = "ROOT"
-        st.session_state.sel_folder = ""
-        st.session_state.sel_user = ""
+        st.session_state.stage = "ROOT"; st.session_state.sel_folder = ""
     st.rerun()
 
 
 def robust_parse_date(date_str):
-    """盡量寬鬆解析各種日期格式，返回 datetime 或 NaT"""
-    if pd.isna(date_str) or str(date_str).strip() == "":
-        return pd.NaT
-
-    s = str(date_str).strip()
-
-    # 常見中文/混雜情況先替換
-    s = s.replace("年", "-").replace("月", "-").replace("日", "").replace("/", "-").replace(".", "-")
-    s = s.replace("上午", " AM").replace("下午", " PM").replace("时", ":").replace("分", ":").replace("秒", "")
-
-    # 去掉多餘空格
-    s = " ".join(s.split())
-
-    # 常見格式嘗試列表（優先級由高到低）
-    fmts = [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d",
-        "%m-%d-%Y",
-        "%m/%d/%Y",
-        "%m-%d-%y",
-        "%m/%d/%y",
-        "%Y/%m/%d",
-        "%d-%m-%Y",
-        "%d/%m/%Y",
-        "%Y.%m.%d",
-        "%Y年%m月%d日 %H:%M:%S",
-        "%Y年%m月%d日",
-        "%m月%d日 %Y",
-    ]
-
+    if pd.isna(date_str) or str(date_str).strip() == "": return pd.NaT
+    s = str(date_str).strip().replace("年", "-").replace("月", "-").replace("日", "").replace("/", "-").replace(".",
+                                                                                                                "-")
+    fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%m-%d-%Y", "%m/%d/%Y"]
     for fmt in fmts:
         try:
             return pd.to_datetime(s, format=fmt, errors='raise')
         except:
             pass
-
-    # 最後再用 pandas 通用解析（比較慢但最寬鬆）
     try:
         return pd.to_datetime(s, errors='raise')
     except:
         return pd.NaT
 
 
-def load_data(file_name):
+def load_data(file_name, skip_date_parsing=False):
     path = os.path.join(BASE_DIR, file_name)
-    if not os.path.exists(path):
-        return None
-
+    if not os.path.exists(path): return None
     try:
         df = pd.read_excel(path, engine='openpyxl')
-
-        # 尋找可能的日期欄位
-        possible_date_cols = ["ETA", "日期", "Inputdate", "Date", "eta", "到港日期", "預計到達"]
-        date_col = next((col for col in possible_date_cols if col in df.columns), None)
-
+        if skip_date_parsing: return df.fillna("")
+        p_cols = ["ETA", "日期", "Inputdate", "Date"]
+        date_col = next((c for c in p_cols if c in df.columns), None)
         if date_col:
-            # 強制轉成字串再解析，處理最髒的數據
             df[date_col] = df[date_col].astype(str).replace(['nan', 'NaT', 'None', ''], np.nan)
             df[date_col] = df[date_col].apply(robust_parse_date)
-
         return df.fillna("")
     except:
         return None
+
+
+def get_weighted_mean(df_sub, metric_col, weight_col='清关单量'):
+    w = pd.to_numeric(df_sub[weight_col], errors='coerce').fillna(0)
+    m = pd.to_numeric(df_sub[metric_col], errors='coerce').fillna(0)
+    if w.sum() == 0: return 0
+    return (m * w).sum() / w.sum()
+
+
+def draw_actuarial_trend(target_df, metrics, title):
+    fig = go.Figure()
+    v_vol = pd.to_numeric(target_df['清关单量'], errors='coerce').fillna(0).values
+    pct_vol = [0.0] + [(v_vol[i] - v_vol[i - 1]) / v_vol[i - 1] if v_vol[i - 1] != 0 else 0 for i in
+                       range(1, len(v_vol))]
+    fig.add_trace(go.Scatter(x=target_df['时间'], y=v_vol, name="清关单量", mode='lines+markers+text',
+                             text=[f"{p:+.1%}" if i > 0 else "" for i, p in enumerate(pct_vol)],
+                             textposition="top center", line=dict(color='#636EFA', width=4)))
+    colors = ['#EF553B', '#00CC96', '#AB63FA', '#FFA15A']
+    for i, m in enumerate(metrics):
+        v_m = pd.to_numeric(target_df[m], errors='coerce').fillna(0).values
+        pct_m = [0.0] + [(v_m[i] - v_m[i - 1]) / abs(v_m[i - 1]) if v_m[i - 1] != 0 else 0 for i in range(1, len(v_m))]
+        fig.add_trace(go.Scatter(x=target_df['时间'], y=v_m, name=m, yaxis="y2", mode='lines+markers+text',
+                                 text=[f"{p:+.1%}" if i > 0 else "" for i, p in enumerate(pct_m)],
+                                 textposition="bottom center",
+                                 line=dict(color=colors[i % len(colors)], width=2, dash='dot' if i > 0 else None)))
+    fig.update_layout(title=title, yaxis=dict(title="清关单量"),
+                      yaxis2=dict(title="值", overlaying='y', side='right', showgrid=False), hovermode="x unified",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    return fig
 
 
 # --- 4. 界面渲染 ---
@@ -199,164 +145,258 @@ if st.session_state.stage != "ROOT":
         c1, c2 = st.columns([1, 10])
         with c1:
             st.markdown('<div class="back-btn-box">', unsafe_allow_html=True)
-            if st.button("⬅ 返回"):
-                back_one_level()
+            if st.button("⬅ 返回"): back_one_level()
             st.markdown('</div>', unsafe_allow_html=True)
         with c2:
             path_str = f"🏠 主目录 / 📂 {st.session_state.sel_folder}"
-            if st.session_state.sel_user:
-                path_str += f" / {st.session_state.sel_user}"
+            if st.session_state.sel_user: path_str += f" / {st.session_state.sel_user}"
+            if st.session_state.dash_sub: path_str += f" / {st.session_state.dash_sub}"
             st.markdown(f'<div class="breadcrumb-text">{path_str}</div>', unsafe_allow_html=True)
     st.write("---")
 
 if st.session_state.stage == "ROOT":
     st.write("### 目录")
-    folders = ["LAX", "MIA", "ORD", "原始数据"]
-    for f in folders:
-        icon = "📍" if f != "原始数据" else "📦"
-        if st.button(f"{icon} {f}", key=f"root_{f}", use_container_width=True):
-            st.session_state.sel_folder = f
-            st.session_state.stage = "USER"
-            st.rerun()
+    if st.button("📍 LAX",
+                 use_container_width=True): st.session_state.sel_folder = "LAX"; st.session_state.stage = "USER"; st.rerun()
+    if st.button("📍 MIA",
+                 use_container_width=True): st.session_state.sel_folder = "MIA"; st.session_state.stage = "USER"; st.rerun()
+    if st.button("📍 ORD",
+                 use_container_width=True): st.session_state.sel_folder = "ORD"; st.session_state.stage = "USER"; st.rerun()
+    if st.button("📦 原始数据",
+                 use_container_width=True): st.session_state.sel_folder = "原始数据"; st.session_state.stage = "USER"; st.rerun()
+    if st.button("📊 仪表盘",
+                 use_container_width=True): st.session_state.sel_folder = "仪表盘"; st.session_state.stage = "DASHBOARD"; st.rerun()
 
 elif st.session_state.stage == "USER":
     st.write(f"### 选择业务线")
-    # 如果是“原始数据”，额外显示“精算数据”
-    if st.session_state.sel_folder == "原始数据":
-        users = ["AE", "4PX", "精算数据"]
-    else:
-        users = ["AE", "4PX"]
-
+    users = ["AE", "4PX", "精算数据"] if st.session_state.sel_folder == "原始数据" else ["AE", "4PX"]
     for u in users:
         if st.button(u, key=f"u_{u}", use_container_width=True):
-            st.session_state.sel_user = u
-            st.session_state.stage = "FILE"
+            st.session_state.sel_user = u;
+            st.session_state.stage = "FILE";
             st.rerun()
 
-elif st.session_state.stage == "FILE":
-    port, user = st.session_state.sel_folder, st.session_state.sel_user
+####################################################################################################
+# --- 模块 A: 仪表盘核心逻辑区 (包含精算图表满血修正) ---
+####################################################################################################
 
-    if port == "原始数据" and user == "精算数据":
-        # 特殊处理：直接指定精算汇总表
-        target_files = ["精算汇总表.xlsx"]
-    elif port == "原始数据":
-        target_files = [f"LAX-{user}.xlsx", f"MIA-{user}.xlsx", f"ORD-{user}.xlsx"]
-    else:
-        target_files = [f"{port}-{user}-日报.xlsx", f"{port}-{user}-实报实销.xlsx"]
-    valid_files = [f for f in target_files if os.path.exists(os.path.join(BASE_DIR, f))]
+elif st.session_state.stage == "DASHBOARD":
+    if st.session_state.dash_sub == "":
+        st.write("### 仪表盘子菜单")
+        if st.button("📄 进入底表 (编辑数据)", use_container_width=True): st.session_state.dash_sub = "底表"; st.rerun()
+        if st.button("📈 进入分析 (查看图表)", use_container_width=True): st.session_state.dash_sub = "分析"; st.rerun()
 
-    if not valid_files:
-        st.warning("该分类下暂无报表文件。")
-    else:
-        # 文件选择和日期筛选放在同一行区域
-        col_f, col_d = st.columns([1, 2])
-        with col_f:
-            selected_file = st.selectbox("文件列表", valid_files, label_visibility="visible")
+    elif st.session_state.dash_sub == "底表":
+        file_name = "底表.xlsx"
+        uploaded = st.file_uploader("📤 上传并覆盖底表", type=["xlsx"])
+        if uploaded:
+            with open(os.path.join(BASE_DIR, file_name), "wb") as f: f.write(uploaded.getbuffer())
+            st.success("文件已成功更新！");
+            st.rerun()
 
-        df_raw = load_data(selected_file)
-
-        if df_raw is not None:
-            # --- 日期过滤逻辑 ---
-            date_col = None
-            for col in ["ETA", "日期", "Inputdate", "Date"]:
-                if col in df_raw.columns:
-                    date_col = col
-                    break
-
-            df_filtered = df_raw.copy()
-
-            if date_col and df_filtered[date_col].dtype == 'datetime64[ns]':
-                with col_d:
-                    # 已经是 datetime 格式
-                    min_d = df_filtered[date_col].min()
-                    max_d = df_filtered[date_col].max()
-
-                    # 容错：如果数据为空，设为当前
-                    if pd.isnull(min_d): min_d = datetime.now()
-                    if pd.isnull(max_d): max_d = datetime.now()
-                    
-                    # 关键修复点：将控件的最大可选范围手动拉长到 2030 年，确保 2026 年不会因为处于“未来”而被置灰不可点
-                    limit_max = datetime(2030, 12, 31).date()
-
-                    date_range = st.date_input(
-                        f"筛选范围 (基于 {date_col})",
-                        value=(min_d.date(), max_d.date()),
-                        min_value=None, # 不设死最小值，增加灵活性
-                        max_value=limit_max, # 修复点：允许选择到 2030 年
-                        key=f"date_filter_{selected_file}"
-                    )
-
-                    if isinstance(date_range, tuple) and len(date_range) == 2:
-                        start_date, end_date = date_range
-                        mask = (df_filtered[date_col].dt.date >= start_date) & \
-                               (df_filtered[date_col].dt.date <= end_date)
-                        df_filtered = df_filtered.loc[mask]
-
-                # 最終顯示用：轉成友好的字串格式
-                if date_col in df_filtered.columns:
-                    df_filtered[date_col] = df_filtered[date_col].apply(
-                        lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else ""
-                    )
-
-            # 所有欄位轉字串，給 AgGrid 用
-            df_filtered = df_filtered.astype(str).replace({"nan": "", "NaT": "", "None": ""})
-
-            if "Index" not in df_filtered.columns:
-                df_filtered.insert(0, "Index", range(1, len(df_filtered) + 1))
-
+        df_db = load_data(file_name, skip_date_parsing=True)
+        if df_db is not None:
+            if "Index" not in df_db.columns: df_db.insert(0, "Index", range(1, len(df_db) + 1))
             st.write("---")
             t_col, dl_col = st.columns([4, 1])
             with t_col:
-                st.write(f"**当前编辑：{selected_file} (共 {len(df_filtered)} 行)**")
+                st.write(f"**底表管理模式 ({len(df_db)} 行)**")
             with dl_col:
-                st.markdown('<div class="back-btn-box">', unsafe_allow_html=True)
-                towrite = BytesIO()
-                df_filtered.to_excel(towrite, index=False, engine='openpyxl')
-                st.download_button("下载当前文档", towrite.getvalue(), file_name=f"Filtered_{selected_file}",
-                                    use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+                towrite = BytesIO();
+                df_db.to_excel(towrite, index=False)
+                st.download_button("📥 下载文档", towrite.getvalue(), file_name=file_name, use_container_width=True)
 
-            # --- AgGrid 配置 ---
-            gb = GridOptionsBuilder.from_dataframe(df_filtered)
-            vertical_line_style = {'border-right': '1px solid #d0d0d0'}
-            gb.configure_default_column(
-                editable=True, filter=True, sortable=True, resizable=True,
-                autoHeight=False, wrapText=False, minWidth=150,
-                cellStyle=vertical_line_style
-            )
-            gb.configure_column(
-                "Index", width=80, pinned='left', cellStyle=vertical_line_style
-            )
-            gb.configure_side_bar(filters_panel=False, columns_panel=True)
+            gb = GridOptionsBuilder.from_dataframe(df_db)
+            gb.configure_default_column(editable=True, filter=True, sortable=True, resizable=True, minWidth=150,
+                                        cellStyle={'border-right': '1px solid #d0d0d0'})
+            gb.configure_grid_options(enableRangeSelection=True, enableFillHandle=True, rowDragManaged=True,
+                                      suppressColumnVirtualisation=True, alwaysShowHorizontalScroll=True)
             gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=50)
+            gb.configure_side_bar(filters_panel=False, columns_panel=True)
             gb.configure_selection(selection_mode="multiple", use_checkbox=True)
+            gb.configure_column("Index", width=90, pinned='left', checkboxSelection=True, headerCheckboxSelection=True)
 
-            gb.configure_grid_options(
-                enableRangeSelection=True,
-                enableFillHandle=True,
-                rowDragManaged=True,
-                suppressColumnVirtualisation=True,
-                domLayout='normal',
-                alwaysShowHorizontalScroll=True
-            )
-
-            res = AgGrid(
-                df_filtered,
-                gridOptions=gb.build(),
-                height=800,
-                theme='alpine',
-                update_mode=GridUpdateMode.VALUE_CHANGED,
-                enable_enterprise_modules=True,
-                fit_columns_on_grid_load=False,
-                key=f"grid_{selected_file}_{len(df_filtered)}"
-            )
-
+            res = AgGrid(df_db, gridOptions=gb.build(), height=750, theme='alpine',
+                         update_mode=GridUpdateMode.VALUE_CHANGED, enable_enterprise_modules=True)
             if st.button("💾 确认提交修改", type="primary", use_container_width=True):
-                try:
-                    save_df = pd.DataFrame(res['data'])
-                    if "Index" in save_df.columns:
-                        save_df = save_df.drop(columns=["Index"])
-                    save_df.to_excel(os.path.join(BASE_DIR, selected_file), index=False)
-                    st.toast("✅ 数据已同步（仅保存当前过滤范围内的修改）")
-                except Exception as e:
-                    st.error(f"保存失败: {e}")
+                save_df = pd.DataFrame(res['data'])
+                if "Index" in save_df.columns: save_df = save_df.drop(columns=["Index"])
+                save_df.to_excel(os.path.join(BASE_DIR, file_name), index=False);
+                st.toast("✅ 数据同步完成")
+
+    elif st.session_state.dash_sub == "分析":
+        df_raw = load_data("底表.xlsx", skip_date_parsing=True)
+        if df_raw is not None:
+            df_raw['时间'] = df_raw['时间'].astype(str)
+            all_times = sorted(df_raw['时间'].unique().tolist())
+            ports = [p for p in df_raw['口岸'].unique() if p != '整体'] + ['整体']
+
+            st.sidebar.subheader("全局筛选")
+            s_p = st.sidebar.selectbox("起始周期", all_times, index=0)
+            e_p = st.sidebar.selectbox("截止周期", all_times, index=len(all_times) - 1)
+            sel_range = all_times[all_times.index(s_p): all_times.index(e_p) + 1]
+            df_v = df_raw[df_raw['时间'].isin(sel_range)]
+
+            st.header("1. 业务规模与盈利能力")
+            c1, c2 = st.columns(2)
+            with c1:
+                df_pie = df_v[df_v['口岸'] != '整体'].groupby('口岸')['清关单量'].sum().reset_index()
+                st.plotly_chart(px.pie(df_pie, values='清关单量', names='口岸', title="单量占比", hole=0.4),
+                                use_container_width=True)
+            with c2:
+                w_res = [{'口岸': p, '毛利': get_weighted_mean(df_v[df_v['口岸'] == p], '清关单均毛利2')} for p in
+                         ports]
+                fig = px.bar(pd.DataFrame(w_res), x='口岸', y='毛利', text='毛利', color='毛利',
+                             color_continuous_scale='RdYlGn', title="加权平均单均毛利2")
+                fig.update_traces(texttemplate='%{text:.2f}', textposition='outside');
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.header("2. 成本项动态趋势")
+            port_c = st.selectbox("选择分析口岸 (成本趋势)", ports, index=len(ports) - 1, key="pc_v_v")
+            df_p_c = df_v[df_v['口岸'] == port_c]
+            c_choices = ["清关单均固定成本", "清关单均变动成本"]
+            sel_c = st.multiselect("勾选显示指标:", c_choices, default=c_choices, key="ms_c_v")
+            if sel_c: st.plotly_chart(draw_actuarial_trend(df_p_c, sel_c, f"{port_c}: 成本趋势"),
+                                      use_container_width=True)
+
+            st.header("3. 收入与毛利动态趋势")
+            port_i = st.selectbox("选择分析口岸 (盈利趋势)", ports, index=len(ports) - 1, key="pi_v_v")
+            df_p_i = df_v[df_v['口岸'] == port_i]
+            i_choices = ["清关单均收入", "清关单均毛利2"]
+            sel_i = st.multiselect("勾选显示指标:", i_choices, default=i_choices, key="ms_i_v")
+            if sel_i: st.plotly_chart(draw_actuarial_trend(df_p_i, sel_i, f"{port_i}: 盈利趋势"),
+                                      use_container_width=True)
+
+            st.header("4 & 5. 深度归因分析")
+            port_a = st.selectbox("归因分析口岸", ports, index=len(ports) - 1, key="pa_v_v")
+            f_reg = ["清关单量", "单均清关申报费", "单均提货费", "单均航司目的港费", "单均航司ams申报费",
+                     "单均卡班运输费_清关", "单均库内拆板费", "单均人力成本", "单均其他运营成本"]
+            f_full = f_reg + ["AE主单数", "LYT主单数", "AE主单重量", "LYT主单重量"]
+            ca1, ca2 = st.columns([3, 2])
+            with ca1:
+                st.subheader("核心因子加权相关性")
+                df_reg_d = df_raw[(df_raw['口岸'] == port_a) & (pd.to_numeric(df_raw['清关单量'], errors='coerce') > 0)]
+                if len(df_reg_d) > 2:
+                    coefs = [pd.to_numeric(df_reg_d[f], errors='coerce').corr(
+                        pd.to_numeric(df_reg_d['清关毛利率2'], errors='coerce')) for f in f_reg]
+                    res_r = pd.DataFrame({'指标': f_reg, '权重': np.abs(coefs),
+                                          '方向': ['正' if c > 0 else '负' for c in coefs]}).sort_values('权重')
+                    st.plotly_chart(px.bar(res_r, x='权重', y='指标', orientation='h', color='方向',
+                                           color_discrete_map={'正': '#00CC96', '负': '#EF553B'}, title="因子影响分析"),
+                                    use_container_width=True)
+            with ca2:
+                st.subheader("⚡ 显著偏离度")
+                df_hist = df_raw[df_raw['口岸'] == port_a]
+                diffs = [(get_weighted_mean(df_v[df_v['口岸'] == port_a], f) - get_weighted_mean(df_hist, f)) / (
+                            abs(get_weighted_mean(df_hist, f)) or 1) for f in f_full]
+                res_d = pd.DataFrame({'指标': f_full, '偏离': diffs, 'abs': np.abs(diffs)}).sort_values('abs',
+                                                                                                        ascending=False).head(
+                    5)
+                fig_d = px.bar(res_d, x='偏离', y='指标', orientation='h',
+                               text=res_d['偏离'].apply(lambda x: f"{x:+.1%}"), title="显著偏离历史项")
+                st.plotly_chart(fig_d, use_container_width=True)
+
+            # --- 模块 6: 核心指标环比 (悬浮增强修正版) ---
+            st.header("6. 核心指标任意周期环比")
+            ccol1, ccol2 = st.columns(2)
+            with ccol1:
+                t_base = st.selectbox("基准周期 (较早)", all_times, index=max(0, len(all_times) - 2), key="tb_v_v")
+            with ccol2:
+                t_comp = st.selectbox("对比周期 (较新)", all_times, index=len(all_times) - 1, key="tc_v_v")
+            port_cb = st.selectbox("选择目标口岸", ports, index=len(ports) - 1, key="pcb_v_v")
+
+            m_list = f_full + ["清关单均收入", "清关单均毛利2"]
+            d1, d2 = df_raw[(df_raw['口岸'] == port_cb) & (df_raw['时间'] == t_base)], df_raw[
+                (df_raw['口岸'] == port_cb) & (df_raw['时间'] == t_comp)]
+
+            if not d1.empty and not d2.empty:
+                chgs, v1_list, v2_list = [], [], []
+                for m in m_list:
+                    v1 = pd.to_numeric(d1[m].values[0], errors='coerce')
+                    v2 = pd.to_numeric(d2[m].values[0], errors='coerce')
+                    v1_list.append(v1);
+                    v2_list.append(v2)
+                    chgs.append((v2 - v1) / abs(v1) if v1 != 0 else 0)
+
+                df_cb = pd.DataFrame({'指标': m_list, '变化': chgs, '基准值': v1_list, '对比值': v2_list})
+                # 修正高度：保底 0.05 确保 0 值也能悬浮
+                df_cb['展示高度'] = df_cb['变化'].apply(
+                    lambda x: np.sign(x) * (0.05 + abs(x)) if abs(x) > 1e-6 else 0.05).clip(-2.0, 2.0)
+                df_cb['评价'] = df_cb.apply(lambda r: ('恶化' if r['变化'] > 0 else '优化') if any(
+                    x in r['指标'] for x in ['费', '成本', '重量']) else ('优化' if r['变化'] > 0 else '恶化'), axis=1)
+
+                fig_cb = px.bar(df_cb, x='指标', y='展示高度',
+                                text=[f"{v:+.1%}" if abs(v) > 1e-6 else "0.0%" for v in df_cb['变化']],
+                                color='评价', color_discrete_map={'优化': '#00CC96', '恶化': '#EF553B'},
+                                hover_data=['基准值', '对比值', '变化'])  # 显式传入供 customdata 使用
+
+                fig_cb.update_layout(
+                    hoverlabel=dict(bgcolor="#F8F9FA", font_size=18, font_family="Arial Black"),
+                    yaxis_tickformat='.0%', title=f"{port_cb} 环比分析 (鼠标悬浮查看 6 位小数)"
+                )
+                fig_cb.update_traces(
+                    # 修正：customdata 对应 hover_data 的顺序 [基准值, 对比值, 变化]
+                    hovertemplate="<b>指标: %{x}</b><br><br>基准值: %{customdata[0]:.6f}<br>对比值: %{customdata[1]:.6f}<br>变化率: %{customdata[2]:+.4%}<extra></extra>",
+                    textposition='outside'
+                )
+                st.plotly_chart(fig_cb, use_container_width=True)
+
+####################################################################################################
+# --- 模块 A 结束 ---
+####################################################################################################
+
+# 原报表界面
+elif st.session_state.stage == "FILE":
+    port, user = st.session_state.sel_folder, st.session_state.sel_user
+    v_files = [f for f in
+               [f"{port}-{user}-日报.xlsx", f"{port}-{user}-实报实销.xlsx", f"LAX-{user}.xlsx", f"MIA-{user}.xlsx",
+                f"ORD-{user}.xlsx", "精算汇总表.xlsx"] if os.path.exists(os.path.join(BASE_DIR, f))]
+    if not v_files:
+        st.warning("暂无报表。")
+    else:
+        cf, cd = st.columns([1, 2]);
+        sf = cf.selectbox("文件选择", v_files)
+        df_raw = load_data(sf)
+        if df_raw is not None:
+            date_col = next((c for c in ["ETA", "日期", "Inputdate", "Date"] if c in df_raw.columns), None)
+            df_filtered = df_raw.copy()
+            if date_col and df_filtered[date_col].dtype == 'datetime64[ns]':
+                with cd:
+                    min_d = df_filtered[date_col].min()
+                    dr = st.date_input("日期范围",
+                                       value=(min_d.date() if not pd.isnull(min_d) else datetime.now().date(),
+                                              datetime.now().date()))
+                    if isinstance(dr, tuple) and len(dr) == 2:
+                        df_filtered = df_filtered[
+                            (df_filtered[date_col].dt.date >= dr[0]) & (df_filtered[date_col].dt.date <= dr[1])]
+                df_filtered[date_col] = df_filtered[date_col].apply(
+                    lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else "")
+
+            df_filtered = df_filtered.astype(str).replace({"nan": ""})
+            if "Index" not in df_filtered.columns: df_filtered.insert(0, "Index", range(1, len(df_filtered) + 1))
+            st.write("---")
+            t_col, dl_col = st.columns([4, 1]);
+            t_col.write(f"**文件编辑：{sf} ({len(df_filtered)} 行)**")
+            with dl_col:
+                tow = BytesIO();
+                df_filtered.to_excel(tow, index=False)
+                st.download_button("下载文档", tow.getvalue(), file_name=f"Filtered_{sf}", use_container_width=True)
+
+            gb = GridOptionsBuilder.from_dataframe(df_filtered)
+            gb.configure_default_column(editable=True, filter=True, sortable=True, resizable=True, minWidth=150,
+                                        cellStyle={'border-right': '1px solid #d0d0d0'})
+            gb.configure_grid_options(enableRangeSelection=True, enableFillHandle=True, rowDragManaged=True,
+                                      suppressColumnVirtualisation=True, domLayout='normal',
+                                      alwaysShowHorizontalScroll=True)
+            gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=50)
+            gb.configure_side_bar(filters_panel=False, columns_panel=True)
+            gb.configure_selection(selection_mode="multiple", use_checkbox=True)
+            gb.configure_column("Index", width=90, pinned='left', checkboxSelection=True, headerCheckboxSelection=True)
+
+            res = AgGrid(df_filtered, gridOptions=gb.build(), height=800, theme='alpine',
+                         update_mode=GridUpdateMode.VALUE_CHANGED, enable_enterprise_modules=True)
+            if st.button("💾 确认保存修改", type="primary", use_container_width=True):
+                save_df = pd.DataFrame(res['data'])
+                if "Index" in save_df.columns: save_df = save_df.drop(columns=["Index"])
+                save_df.to_excel(os.path.join(BASE_DIR, sf), index=False);
+                st.toast("✅ 数据同步完成")
