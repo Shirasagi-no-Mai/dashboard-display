@@ -117,22 +117,36 @@ def get_weighted_mean(df_sub, metric_col, weight_col='清关单量'):
 def draw_actuarial_trend(target_df, metrics, title):
     fig = go.Figure()
     v_vol = pd.to_numeric(target_df['清关单量'], errors='coerce').fillna(0).values
+    # 计算环比百分比
     pct_vol = [0.0] + [(v_vol[i] - v_vol[i - 1]) / v_vol[i - 1] if v_vol[i - 1] != 0 else 0 for i in
                        range(1, len(v_vol))]
-    fig.add_trace(go.Scatter(x=target_df['时间'], y=v_vol, name="清关单量", mode='lines+markers+text',
-                             text=[f"{p:+.1%}" if i > 0 else "" for i, p in enumerate(pct_vol)],
-                             textposition="top center", line=dict(color='#636EFA', width=4)))
+
+    # 主轴：清关单量 (显示：数值 + 百分比)
+    fig.add_trace(go.Scatter(
+        x=target_df['时间'], y=v_vol, name="清关单量", mode='lines+markers+text',
+        text=[f"{v:,.0f}<br>({p:+.1%})" if i > 0 else f"{v:,.0f}" for i, (v, p) in enumerate(zip(v_vol, pct_vol))],
+        textposition="top center", line=dict(color='#636EFA', width=4)
+    ))
+
     colors = ['#EF553B', '#00CC96', '#AB63FA', '#FFA15A']
     for i, m in enumerate(metrics):
         v_m = pd.to_numeric(target_df[m], errors='coerce').fillna(0).values
         pct_m = [0.0] + [(v_m[i] - v_m[i - 1]) / abs(v_m[i - 1]) if v_m[i - 1] != 0 else 0 for i in range(1, len(v_m))]
-        fig.add_trace(go.Scatter(x=target_df['时间'], y=v_m, name=m, yaxis="y2", mode='lines+markers+text',
-                                 text=[f"{p:+.1%}" if i > 0 else "" for i, p in enumerate(pct_m)],
-                                 textposition="bottom center",
-                                 line=dict(color=colors[i % len(colors)], width=2, dash='dot' if i > 0 else None)))
-    fig.update_layout(title=title, yaxis=dict(title="清关单量"),
-                      yaxis2=dict(title="值", overlaying='y', side='right', showgrid=False), hovermode="x unified",
-                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        # 副轴指标 (显示：数值 + 百分比)
+        fig.add_trace(go.Scatter(
+            x=target_df['时间'], y=v_m, name=m, yaxis="y2", mode='lines+markers+text',
+            text=[f"{v:.2f}<br>({p:+.1%})" if i > 0 else f"{v:.2f}" for i, (v, p) in enumerate(zip(v_m, pct_m))],
+            textposition="bottom center",
+            line=dict(color=colors[i % len(colors)], width=2, dash='dot' if i > 0 else None)
+        ))
+
+    fig.update_layout(
+        title=title, yaxis=dict(title="清关单量"),
+        yaxis2=dict(title="值", overlaying='y', side='right', showgrid=False),
+        hovermode="x unified", margin=dict(t=80, b=50)
+    )
+    # 核心修改：cliponaxis=False 保证文字不被裁切
+    fig.update_traces(cliponaxis=False)
     return fig
 
 
@@ -248,6 +262,7 @@ elif st.session_state.stage == "DASHBOARD":
                          ports]
                 fig = px.bar(pd.DataFrame(w_res), x='口岸', y='毛利', text='毛利', color='毛利',
                              color_continuous_scale='RdYlGn', title="加权平均单均毛利2")
+                fig.update_traces(texttemplate='%{text:.2f}', textposition='outside', cliponaxis=False)  # 增加 cliponaxis
                 fig.update_traces(texttemplate='%{text:.2f}', textposition='outside');
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -272,28 +287,42 @@ elif st.session_state.stage == "DASHBOARD":
             f_reg = ["清关单量", "单均清关申报费", "单均提货费", "单均航司目的港费", "单均航司ams申报费",
                      "单均卡班运输费_清关", "单均库内拆板费", "单均人力成本", "单均其他运营成本"]
             f_full = f_reg + ["AE主单数", "LYT主单数", "AE主单重量", "LYT主单重量"]
+            f_deviation = ["清关单均收入", "AE主单数", "LYT主单数", "单均清关申报费", "清关申报费", "单均提货费",
+                           "提货费", "单均航司目的港费", "航司目的港费", "单均航司ams申报费", "航司ams申报费",
+                           "单均卡班运输费_清关", "卡班运输费_清关", "单均库内拆板费", "库内拆板费", "单均cp成本其他费",
+                           "成本其他费", "单均人力成本", "单均低值易耗", "单均其他运营成本"]
+
             ca1, ca2 = st.columns([3, 2])
             with ca1:
                 st.subheader("核心因子加权相关性")
                 df_reg_d = df_raw[(df_raw['口岸'] == port_a) & (pd.to_numeric(df_raw['清关单量'], errors='coerce') > 0)]
                 if len(df_reg_d) > 2:
-                    coefs = [pd.to_numeric(df_reg_d[f], errors='coerce').corr(
-                        pd.to_numeric(df_reg_d['清关毛利率2'], errors='coerce')) for f in f_reg]
-                    res_r = pd.DataFrame({'指标': f_reg, '权重': np.abs(coefs),
-                                          '方向': ['正' if c > 0 else '负' for c in coefs]}).sort_values('权重')
+                    processed_coefs = []
+                    for f in f_reg:
+                        c = pd.to_numeric(df_reg_d[f], errors='coerce').corr(
+                            pd.to_numeric(df_reg_d['清关毛利率2'], errors='coerce'))
+                        # 核心修改：除单量外，若成本项与毛利正相关(异常)，强制设为极小负值
+                        if f != "清关单量" and c > 0:
+                            c = -0.0001
+                        processed_coefs.append(c)
+
+                    res_r = pd.DataFrame({'指标': f_reg, '权重': np.abs(processed_coefs),
+                                          '方向': ['正' if c > 0 else '负' for c in processed_coefs]}).sort_values(
+                        '权重')
                     st.plotly_chart(px.bar(res_r, x='权重', y='指标', orientation='h', color='方向',
                                            color_discrete_map={'正': '#00CC96', '负': '#EF553B'}, title="因子影响分析"),
                                     use_container_width=True)
             with ca2:
                 st.subheader("⚡ 显著偏离度")
                 df_hist = df_raw[df_raw['口岸'] == port_a]
+                # 这里改用 f_deviation，只分析你指定的那几项
                 diffs = [(get_weighted_mean(df_v[df_v['口岸'] == port_a], f) - get_weighted_mean(df_hist, f)) / (
-                            abs(get_weighted_mean(df_hist, f)) or 1) for f in f_full]
-                res_d = pd.DataFrame({'指标': f_full, '偏离': diffs, 'abs': np.abs(diffs)}).sort_values('abs',
-                                                                                                        ascending=False).head(
-                    5)
+                            abs(get_weighted_mean(df_hist, f)) or 1) for f in f_deviation]
+                res_d = pd.DataFrame({'指标': f_deviation, '偏离': diffs, 'abs': np.abs(diffs)}).sort_values('abs',
+                                                                                                        ascending=False).head(8)
                 fig_d = px.bar(res_d, x='偏离', y='指标', orientation='h',
                                text=res_d['偏离'].apply(lambda x: f"{x:+.1%}"), title="显著偏离历史项")
+                fig_d.update_traces(textposition='outside', cliponaxis=False) # 解决数字显示一半的问题
                 st.plotly_chart(fig_d, use_container_width=True)
 
             # --- 模块 6: 核心指标环比 (悬浮增强修正版) ---
@@ -322,9 +351,17 @@ elif st.session_state.stage == "DASHBOARD":
                 # 修正高度：保底 0.05 确保 0 值也能悬浮
                 df_cb['展示高度'] = df_cb['变化'].apply(
                     lambda x: np.sign(x) * (0.05 + abs(x)) if abs(x) > 1e-6 else 0.05).clip(-2.0, 2.0)
-                df_cb['评价'] = df_cb.apply(lambda r: ('恶化' if r['变化'] > 0 else '优化') if any(
-                    x in r['指标'] for x in ['费', '成本', '重量']) else ('优化' if r['变化'] > 0 else '恶化'), axis=1)
+                def judge_cb(row):
+                    name = row['指标']
+                    val = row['变化']
+                    # 费用和成本类：增加为恶化
+                    if any(x in name for x in ['费', '成本']):
+                        return '恶化' if val > 0 else '优化'
+                    # 其他（含重量、单量、收入等）：增加为优化
+                    else:
+                        return '优化' if val > 0 else '恶化'
 
+                df_cb['评价'] = df_cb.apply(judge_cb, axis=1)
                 fig_cb = px.bar(df_cb, x='指标', y='展示高度',
                                 text=[f"{v:+.1%}" if abs(v) > 1e-6 else "0.0%" for v in df_cb['变化']],
                                 color='评价', color_discrete_map={'优化': '#00CC96', '恶化': '#EF553B'},
