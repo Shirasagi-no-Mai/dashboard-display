@@ -11,8 +11,7 @@ import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 
 # --- 1. 页面配置 ---
-st.set_page_config(layout="wide", page_title="美国C段口岸数据看板")
-
+st.set_page_config(layout="wide", page_title="美国C段口岸数据看板", initial_sidebar_state="expanded")
 
 def check_password():
     def password_entered():
@@ -38,9 +37,16 @@ if not check_password(): st.stop()
 # --- 2. 深度 CSS 定制 (还原 31px 标题和 5rem 边距) ---
 st.markdown("""
     <style>
+    
+    button[kind="headerNoPadding"] {
+    visibility: visible !important;
+    display: block !important;
+    background-color: #f0f2f6 !important; /* 给按钮加个浅灰背景 */
+    border: 1px solid #d0d0d0 !important; /* 加个边框 */
+    z-index: 999999 !important;
+    }
     .main .block-container { padding-top: 1rem !important; padding-left: 5rem !important; padding-right: 5rem !important; }
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
+     footer {visibility: hidden;}
     .main-title { font-size: 26px; font-weight: bold; margin-bottom: 1rem; }
     .breadcrumb-text { font-size: 31px !important; font-weight: 600; color: #333; display: flex; align-items: center; height: 40px; margin-top: 22px !important; }
     .ag-cell { white-space: nowrap !important; }
