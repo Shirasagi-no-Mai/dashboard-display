@@ -60,7 +60,7 @@ st.markdown("""
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "测试文件夹")
 if not os.path.exists(BASE_DIR): os.makedirs(BASE_DIR)
 
-st_autorefresh(interval=5000, key="datarefresh")
+st_autorefresh(interval=600000, key="datarefresh")
 
 if 'stage' not in st.session_state: st.session_state.stage = "ROOT"
 if 'sel_folder' not in st.session_state: st.session_state.sel_folder = ""
