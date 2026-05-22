@@ -9,9 +9,10 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
-
+import zipfile
 # --- 1. 页面配置 ---
 st.set_page_config(layout="wide", page_title="美国C段口岸数据看板", initial_sidebar_state="expanded")
+
 
 def check_password():
     def password_entered():
@@ -37,7 +38,7 @@ if not check_password(): st.stop()
 # --- 2. 深度 CSS 定制 (还原 31px 标题和 5rem 边距) ---
 st.markdown("""
     <style>
-    
+
     button[kind="headerNoPadding"] {
     visibility: visible !important;
     display: block !important;
@@ -60,6 +61,21 @@ st.markdown("""
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "测试文件夹")
 if not os.path.exists(BASE_DIR): os.makedirs(BASE_DIR)
 
+
+# --- 功能说明：递归打包文件夹为 ZIP 字节流 ---
+def zip_directory(folder_path):
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                abs_path = os.path.join(root, file)
+                rel_path = os.path.relpath(abs_path, folder_path)
+                zf.write(abs_path, rel_path)
+    return zip_buffer.getvalue()
+# ---------------------------------------
+
+
+
 st_autorefresh(interval=600000, key="datarefresh")
 
 if 'stage' not in st.session_state: st.session_state.stage = "ROOT"
@@ -73,11 +89,13 @@ def back_one_level():
         if st.session_state.dash_sub != "":
             st.session_state.dash_sub = ""
         else:
-            st.session_state.stage = "ROOT"; st.session_state.sel_folder = ""
+            st.session_state.stage = "ROOT";
+            st.session_state.sel_folder = ""
     elif st.session_state.stage == "FILE":
         st.session_state.stage = "USER"
     elif st.session_state.stage == "USER":
-        st.session_state.stage = "ROOT"; st.session_state.sel_folder = ""
+        st.session_state.stage = "ROOT";
+        st.session_state.sel_folder = ""
     st.rerun()
 
 
@@ -157,8 +175,24 @@ def draw_actuarial_trend(target_df, metrics, title):
 
 
 # --- 4. 界面渲染 ---
-st.markdown('<div class="main-title">🇺🇸 美国C段口岸数据看板</div>', unsafe_allow_html=True)
-
+# --- 功能说明：在标题右侧增加小巧的下载备份图标按钮 ---
+head_col1, head_col2 = st.columns([8.5, 1.5])
+with head_col1:
+    st.markdown('<div class="main-title">🇺🇸 美国C段口岸数据看板</div>', unsafe_allow_html=True)
+with head_col2:
+    try:
+        folder_zip = zip_directory(BASE_DIR)
+        st.download_button(
+            label="📦 下载全量备份",
+            data=folder_zip,
+            file_name=f"测试文件夹备份_{datetime.now().strftime('%m%d_%H%M')}.zip",
+            mime="application/zip",
+            use_container_width=True,
+            help="点击将‘测试文件夹’内所有文件打包下载到本地"
+        )
+    except Exception as e:
+        st.error("备份准备失败")
+# -----------------------------------------------
 if st.session_state.stage != "ROOT":
     col_nav = st.container()
     with col_nav:
@@ -323,12 +357,13 @@ elif st.session_state.stage == "DASHBOARD":
                 df_hist = df_raw[df_raw['口岸'] == port_a]
                 # 这里改用 f_deviation，只分析你指定的那几项
                 diffs = [(get_weighted_mean(df_v[df_v['口岸'] == port_a], f) - get_weighted_mean(df_hist, f)) / (
-                            abs(get_weighted_mean(df_hist, f)) or 1) for f in f_deviation]
+                        abs(get_weighted_mean(df_hist, f)) or 1) for f in f_deviation]
                 res_d = pd.DataFrame({'指标': f_deviation, '偏离': diffs, 'abs': np.abs(diffs)}).sort_values('abs',
-                                                                                                        ascending=False).head(8)
+                                                                                                             ascending=False).head(
+                    8)
                 fig_d = px.bar(res_d, x='偏离', y='指标', orientation='h',
                                text=res_d['偏离'].apply(lambda x: f"{x:+.1%}"), title="显著偏离历史项")
-                fig_d.update_traces(textposition='outside', cliponaxis=False) # 解决数字显示一半的问题
+                fig_d.update_traces(textposition='outside', cliponaxis=False)  # 解决数字显示一半的问题
                 st.plotly_chart(fig_d, use_container_width=True)
 
             # --- 模块 6: 核心指标环比 (悬浮增强修正版) ---
@@ -357,6 +392,8 @@ elif st.session_state.stage == "DASHBOARD":
                 # 修正高度：保底 0.05 确保 0 值也能悬浮
                 df_cb['展示高度'] = df_cb['变化'].apply(
                     lambda x: np.sign(x) * (0.05 + abs(x)) if abs(x) > 1e-6 else 0.05).clip(-2.0, 2.0)
+
+
                 def judge_cb(row):
                     name = row['指标']
                     val = row['变化']
@@ -366,6 +403,7 @@ elif st.session_state.stage == "DASHBOARD":
                     # 其他（含重量、单量、收入等）：增加为优化
                     else:
                         return '优化' if val > 0 else '恶化'
+
 
                 df_cb['评价'] = df_cb.apply(judge_cb, axis=1)
                 fig_cb = px.bar(df_cb, x='指标', y='展示高度',
