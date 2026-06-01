@@ -223,7 +223,8 @@ if st.session_state.stage == "ROOT":
 
 elif st.session_state.stage == "USER":
     st.write(f"### 选择业务线")
-    users = ["AE", "4PX", "精算数据"] if st.session_state.sel_folder == "原始数据" else ["AE", "4PX"]
+    # 只需要在这里的列表中添加 "BDT"
+    users = ["AE", "4PX", "BDT", "精算数据"] if st.session_state.sel_folder == "原始数据" else ["AE", "4PX", "BDT"]
     for u in users:
         if st.button(u, key=f"u_{u}", use_container_width=True):
             st.session_state.sel_user = u;
@@ -447,12 +448,14 @@ elif st.session_state.stage == "FILE":
                     dr = st.date_input("日期范围",
                                        value=(min_d.date() if not pd.isnull(min_d) else datetime.now().date(),
                                               datetime.now().date()))
-                    if isinstance(dr, tuple) and len(dr) == 2:
-                        df_filtered = df_filtered[
-                            (df_filtered[date_col].dt.date >= dr[0]) & (df_filtered[date_col].dt.date <= dr[1])]
-                df_filtered[date_col] = df_filtered[date_col].apply(
-                    lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else "")
 
+                    # --- 下面是修改后的过滤逻辑 ---
+                    if isinstance(dr, tuple) and len(dr) == 2:
+                        start_ts = pd.Timestamp(dr[0])
+                        end_ts = pd.Timestamp(dr[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
+                        df_filtered = df_filtered[
+                            (df_filtered[date_col] >= start_ts) & (df_filtered[date_col] <= end_ts)
+                            ]
             df_filtered = df_filtered.astype(str).replace({"nan": ""})
             if "Index" not in df_filtered.columns: df_filtered.insert(0, "Index", range(1, len(df_filtered) + 1))
             st.write("---")
