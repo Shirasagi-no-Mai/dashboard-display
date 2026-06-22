@@ -216,11 +216,10 @@ if st.session_state.stage == "ROOT":
                  use_container_width=True): st.session_state.sel_folder = "MIA"; st.session_state.stage = "USER"; st.rerun()
     if st.button("📍 ORD",
                  use_container_width=True): st.session_state.sel_folder = "ORD"; st.session_state.stage = "USER"; st.rerun()
+    if st.button("📍 JFK",  # <--- 新增这行
+                 use_container_width=True): st.session_state.sel_folder = "JFK"; st.session_state.stage = "USER"; st.rerun()
     if st.button("📦 原始数据",
                  use_container_width=True): st.session_state.sel_folder = "原始数据"; st.session_state.stage = "USER"; st.rerun()
-    if st.button("📊 仪表盘",
-                 use_container_width=True): st.session_state.sel_folder = "仪表盘"; st.session_state.stage = "DASHBOARD"; st.rerun()
-
 elif st.session_state.stage == "USER":
     st.write(f"### 选择业务线")
     # 只需要在这里的列表中添加 "BDT"
@@ -432,11 +431,13 @@ elif st.session_state.stage == "DASHBOARD":
 ####################################################################################################
 
 # 原报表界面
+# 原报表界面
 elif st.session_state.stage == "FILE":
     port, user = st.session_state.sel_folder, st.session_state.sel_user
     v_files = [f for f in
-               [f"{port}-{user}-日报.xlsx", f"{port}-{user}-实报实销.xlsx", f"LAX-{user}.xlsx", f"MIA-{user}.xlsx",
-                f"ORD-{user}.xlsx", "精算汇总表.xlsx"] if os.path.exists(os.path.join(BASE_DIR, f))]
+               [f"{port}-{user}-日报.xlsx", f"{port}-{user}-实报实销.xlsx",
+                f"LAX-{user}.xlsx", f"MIA-{user}.xlsx", f"ORD-{user}.xlsx", f"JFK-{user}.xlsx",  # <--- 新增 f"JFK-{user}.xlsx"
+                "精算汇总表.xlsx"] if os.path.exists(os.path.join(BASE_DIR, f))]
     if not v_files:
         st.warning("暂无报表。")
     else:
